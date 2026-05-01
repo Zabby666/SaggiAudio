@@ -58,6 +58,18 @@ def is_group_chat(message: dict) -> bool:
     return chat_type in {"group", "supergroup"}
 
 
+def normalize_command(text: str) -> str:
+    if not text:
+        return ""
+    first = text.strip().split()[0].lower()
+    return first.split("@")[0]
+
+
+def extract_command_argument(text: str) -> str:
+    parts = text.strip().split(maxsplit=1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
+
 async def tg_api(method: str, payload: Optional[dict] = None) -> dict:
     async with httpx.AsyncClient(timeout=60) as http:
         r = await http.post(f"{telegram_api_base()}/{method}", json=payload or {})
@@ -112,7 +124,7 @@ def transcribe_audio(file_path: Path) -> str:
 def summarize_transcript(transcript: str) -> dict:
     client = openai_client()
     prompt = f"""
-Analizza questa trascrizione di un messaggio audio Telegram e restituisci SOLO JSON valido con questo schema:
+Analizza questa trascrizione di un messaggio Telegram e restituisci SOLO JSON valido con questo schema:
 {{
   "summary": "riassunto breve in italiano",
   "key_points": ["punto 1", "punto 2"],
@@ -126,7 +138,7 @@ Regole:
 - se non ci sono actions o entities usa array vuoti
 - non aggiungere markdown o testo extra
 
-Trascrizione:
+Testo:
 {transcript}
 """.strip()
 
@@ -173,86 +185,86 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
         raise HTTPException(status_code=403, detail="Invalid secret")
 
     update = await request.json()
-    print("TELEGRAM UPDATE:", json.dumps(update, ensure_ascii=False, indent=2))
-
     message = update.get("message") or update.get("edited_message")
     if not message:
         return JSONResponse({"ok": True})
 
-    command_message_id = message.get("message_id")
     chat_id = message["chat"]["id"]
+    message_id = message.get("message_id")
     text = (message.get("text") or "").strip()
+    command = normalize_command(text)
 
     if is_group_chat(message):
-        normalized_command = text.split()[0].split("@")[0].lower() if text else ""
-
-        if normalized_command != "/riassumi":
-            return JSONResponse({"ok": True})
-
-        replied = message.get("reply_to_message") or {}
-        if not replied:
+        if command == "/start":
             await send_message(
                 chat_id,
-                "Rispondi con /riassumi a un messaggio o a un vocale del gruppo.",
-                command_message_id,
+                "Nel gruppo il bot funziona solo quando lo interpelli.\n\nUsa:\n/riassumi@SaggiAudioBot testo da riassumere\n/help@SaggiAudioBot",
+                message_id,
             )
             return JSONResponse({"ok": True})
 
-        target_message = replied
-    else:
-        if text:
-            normalized_command = text.split()[0].split("@")[0].lower()
+        if command == "/help":
+            await send_message(
+                chat_id,
+                "Uso nel gruppo:\n/riassumi@SaggiAudioBot testo da riassumere\n\nIl bot ignora tutti gli altri messaggi.",
+                message_id,
+            )
+            return JSONResponse({"ok": True})
 
-            if normalized_command == "/start":
-                await send_message(
-                    chat_id,
-                    "Mandami un messaggio vocale o inoltrami un audio da Telegram e ti restituisco trascrizione e cose importanti. Nei gruppi, usa /riassumi in risposta a un messaggio o a un vocale.",
-                    command_message_id,
-                )
-                return JSONResponse({"ok": True})
+        if command != "/riassumi":
+            return JSONResponse({"ok": True})
 
-            if normalized_command == "/help":
-                await send_message(
-                    chat_id,
-                    "Comandi disponibili:\n/start\n/help\n\nIn chat privata: inviami un vocale o un file audio.\nNel gruppo: rispondi con /riassumi a un messaggio o a un vocale.",
-                    command_message_id,
-                )
-                return JSONResponse({"ok": True})
+        transcript = extract_command_argument(text)
+        if not transcript:
+            await send_message(
+                chat_id,
+                "Usa il comando così:\n/riassumi@SaggiAudioBot testo da riassumere",
+                message_id,
+            )
+            return JSONResponse({"ok": True})
 
-        target_message = message
+        await send_message(chat_id, "Sto leggendo il messaggio e preparo il riassunto...", message_id)
+        try:
+            structured = summarize_transcript(transcript)
+            reply = format_reply(structured, transcript)
+            await send_message(chat_id, reply, message_id)
+        except Exception as exc:
+            await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", message_id)
 
-    voice = target_message.get("voice")
-    audio = target_message.get("audio")
-    document = target_message.get("document")
+        return JSONResponse({"ok": True})
+
+    if text:
+        if command == "/start":
+            await send_message(
+                chat_id,
+                "Mandami un messaggio vocale o inoltrami un audio da Telegram e ti restituisco trascrizione e cose importanti. Nei gruppi usa /riassumi@SaggiAudioBot seguito dal testo.",
+                message_id,
+            )
+            return JSONResponse({"ok": True})
+
+        if command == "/help":
+            await send_message(
+                chat_id,
+                "Comandi disponibili:\n/start\n/help\n\nIn chat privata: inviami un vocale o un file audio.\nNel gruppo: usa /riassumi@SaggiAudioBot testo.",
+                message_id,
+            )
+            return JSONResponse({"ok": True})
+
+    voice = message.get("voice")
+    audio = message.get("audio")
+    document = message.get("document")
     media = voice or audio or document
 
     if not media:
-        target_text = (target_message.get("text") or "").strip()
-        if target_text:
-            await send_message(chat_id, "Sto leggendo il messaggio e preparo il riassunto...", command_message_id)
-
-            try:
-                structured = summarize_transcript(target_text)
-                reply = format_reply(structured, target_text)
-                await send_message(chat_id, reply, command_message_id)
-            except Exception as exc:
-                await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", command_message_id)
-
-            return JSONResponse({"ok": True})
-
-        await send_message(
-            chat_id,
-            "Rispondi con /riassumi a un messaggio di testo, a un vocale o a un file audio.",
-            command_message_id,
-        )
+        await send_message(chat_id, "Mandami un vocale Telegram o un file audio supportato.", message_id)
         return JSONResponse({"ok": True})
 
     file_size = media.get("file_size", 0)
     if file_size > max_file_mb() * 1024 * 1024:
-        await send_message(chat_id, f"File troppo grande. Limite attuale: {max_file_mb()} MB.", command_message_id)
+        await send_message(chat_id, f"File troppo grande. Limite attuale: {max_file_mb()} MB.", message_id)
         return JSONResponse({"ok": True})
 
-    await send_message(chat_id, "Sto ascoltando il messaggio e preparo il riassunto...", command_message_id)
+    await send_message(chat_id, "Sto ascoltando il messaggio e preparo il riassunto...", message_id)
 
     temp_file: Optional[Path] = None
     try:
@@ -262,9 +274,9 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
         transcript = transcribe_audio(temp_file)
         structured = summarize_transcript(transcript)
         reply = format_reply(structured, transcript)
-        await send_message(chat_id, reply, command_message_id)
+        await send_message(chat_id, reply, message_id)
     except Exception as exc:
-        await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", command_message_id)
+        await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", message_id)
     finally:
         if temp_file and temp_file.exists():
             temp_file.unlink(missing_ok=True)
