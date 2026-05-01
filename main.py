@@ -164,6 +164,17 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/debug-env")
+async def debug_env():
+    return {
+        "TELEGRAM_BOT_TOKEN": bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip()),
+        "TELEGRAM_WEBHOOK_SECRET": bool(os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()),
+        "OPENAI_API_KEY": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "RAILWAY_ENVIRONMENT_NAME": os.getenv("RAILWAY_ENVIRONMENT_NAME", ""),
+        "RAILWAY_SERVICE_NAME": os.getenv("RAILWAY_SERVICE_NAME", ""),
+    }
+
+
 @app.post("/webhook")
 async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)):
     require_env()
