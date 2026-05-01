@@ -139,22 +139,23 @@ def format_reply(data: dict, transcript: str) -> str:
     actions = data.get("actions", [])
     entities = data.get("entities", [])
 
-    lines = ["*Riassunto audio*", "", f"*Sintesi:* {summary}"]
+    lines = ["Riassunto audio", "", "Sintesi", summary]
 
     if key_points:
-        lines += ["", "*Cose importanti:*"]
-        lines += [f"- {item}" for item in key_points]
+        lines.extend(["", "Cose importanti"])
+        lines.extend([f"- {point}" for point in key_points])
 
     if actions:
-        lines += ["", "*Azioni da fare:*"]
-        lines += [f"- {item}" for item in actions]
+        lines.extend(["", "Azioni"])
+        lines.extend([f"- {action}" for action in actions])
 
     if entities:
-        lines += ["", "*Persone, date e riferimenti:*"]
-        lines += [f"- {item}" for item in entities]
+        lines.extend(["", "Entità"])
+        lines.extend([f"- {entity}" for entity in entities])
 
-    preview = transcript[:700] + ("..." if len(transcript) > 700 else "")
-    lines += ["", "*Trascrizione:*", preview]
+    if transcript:
+        lines.extend(["", "Trascrizione", transcript])
+
     return "\n".join(lines)
 
 
