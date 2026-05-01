@@ -9,35 +9,53 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_TRANSCRIBE_MODEL = os.getenv("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
-OPENAI_SUMMARY_MODEL = os.getenv("OPENAI_SUMMARY_MODEL", "gpt-5.4-mini")
-MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "20"))
-
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
-TELEGRAM_FILE_API = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}"
-
 app = FastAPI(title="Telegram Voice Summary Bot")
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+
+def get_env(name: str, default: str = "") -> str:
+    return os.getenv(name, default).strip()
 
 
 def require_env() -> None:
     missing = [
-        name for name, value in {
-            "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
-            "TELEGRAM_WEBHOOK_SECRET": TELEGRAM_WEBHOOK_SECRET,
-            "OPENAI_API_KEY": OPENAI_API_KEY,
-        }.items() if not value
+        name for name in [
+            "TELEGRAM_BOT_TOKEN",
+            "TELEGRAM_WEBHOOK_SECRET",
+            "OPENAI_API_KEY",
+        ]
+        if not get_env(name)
     ]
     if missing:
         raise RuntimeError(f"Missing env vars: {', '.join(missing)}")
 
 
+def telegram_api_base() -> str:
+    return f"https://api.telegram.org/bot{get_env('TELEGRAM_BOT_TOKEN')}"
+
+
+def telegram_file_api_base() -> str:
+    return f"https://api.telegram.org/file/bot{get_env('TELEGRAM_BOT_TOKEN')}"
+
+
+def openai_client() -> OpenAI:
+    return OpenAI(api_key=get_env("OPENAI_API_KEY"))
+
+
+def max_file_mb() -> int:
+    return int(get_env("MAX_FILE_MB", "20"))
+
+
+def openai_transcribe_model() -> str:
+    return get_env("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+
+
+def openai_summary_model() -> str:
+    return get_env("OPENAI_SUMMARY_MODEL", "gpt-4o-mini")
+
+
 async def tg_api(method: str, payload: Optional[dict] = None) -> dict:
     async with httpx.AsyncClient(timeout=60) as http:
-        r = await http.post(f"{TELEGRAM_API}/{method}", json=payload or {})
+        r = await http.post(f"{telegram_api_base()}/{method}", json=payload or {})
         r.raise_for_status()
         data = r.json()
         if not data.get("ok"):
@@ -60,7 +78,7 @@ async def send_message(chat_id: int, text: str, reply_to_message_id: Optional[in
 async def get_file_url(file_id: str) -> str:
     result = await tg_api("getFile", {"file_id": file_id})
     file_path = result["file_path"]
-    return f"{TELEGRAM_FILE_API}/{file_path}"
+    return f"{telegram_file_api_base()}/{file_path}"
 
 
 async def download_file(url: str) -> Path:
@@ -75,9 +93,10 @@ async def download_file(url: str) -> Path:
 
 
 def transcribe_audio(file_path: Path) -> str:
+    client = openai_client()
     with file_path.open("rb") as audio_file:
         transcript = client.audio.transcriptions.create(
-            model=OPENAI_TRANSCRIBE_MODEL,
+            model=openai_transcribe_model(),
             file=audio_file,
         )
     text = getattr(transcript, "text", None)
@@ -87,6 +106,7 @@ def transcribe_audio(file_path: Path) -> str:
 
 
 def summarize_transcript(transcript: str) -> dict:
+    client = openai_client()
     prompt = f"""
 Analizza questa trascrizione di un messaggio audio Telegram e restituisci SOLO JSON valido con questo schema:
 {{
@@ -107,7 +127,7 @@ Trascrizione:
 """.strip()
 
     response = client.responses.create(
-        model=OPENAI_SUMMARY_MODEL,
+        model=openai_summary_model(),
         input=prompt,
     )
     raw = response.output_text.strip()
@@ -131,7 +151,7 @@ def format_reply(data: dict, transcript: str) -> str:
         lines += [f"- {item}" for item in actions]
 
     if entities:
-        lines += ["", "*Persone, date e riferimenti:*" ]
+        lines += ["", "*Persone, date e riferimenti:*"]
         lines += [f"- {item}" for item in entities]
 
     preview = transcript[:700] + ("..." if len(transcript) > 700 else "")
@@ -147,7 +167,7 @@ async def health():
 @app.post("/webhook")
 async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)):
     require_env()
-    if x_telegram_bot_api_secret_token != TELEGRAM_WEBHOOK_SECRET:
+    if x_telegram_bot_api_secret_token != get_env("TELEGRAM_WEBHOOK_SECRET"):
         raise HTTPException(status_code=403, detail="Invalid secret")
 
     update = await request.json()
@@ -185,8 +205,8 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
         return JSONResponse({"ok": True})
 
     file_size = media.get("file_size", 0)
-    if file_size > MAX_FILE_MB * 1024 * 1024:
-        await send_message(chat_id, f"File troppo grande. Limite attuale: {MAX_FILE_MB} MB.", message_id)
+    if file_size > max_file_mb() * 1024 * 1024:
+        await send_message(chat_id, f"File troppo grande. Limite attuale: {max_file_mb()} MB.", message_id)
         return JSONResponse({"ok": True})
 
     await send_message(chat_id, "Sto ascoltando il messaggio e preparo il riassunto...", message_id)
