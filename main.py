@@ -1,4 +1,3 @@
-
 import os
 import json
 import tempfile
@@ -174,6 +173,8 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
         raise HTTPException(status_code=403, detail="Invalid secret")
 
     update = await request.json()
+    print("TELEGRAM UPDATE:", json.dumps(update, ensure_ascii=False, indent=2))
+
     message = update.get("message") or update.get("edited_message")
     if not message:
         return JSONResponse({"ok": True})
