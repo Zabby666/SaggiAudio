@@ -124,7 +124,7 @@ def transcribe_audio(file_path: Path) -> str:
 def summarize_transcript(transcript: str) -> dict:
     client = openai_client()
     prompt = f"""
-Analizza questa trascrizione di un messaggio Telegram e restituisci SOLO JSON valido con questo schema:
+Analizza questo testo e restituisci SOLO JSON valido con questo schema:
 {{
   "summary": "riassunto breve in italiano",
   "key_points": ["punto 1", "punto 2"],
@@ -162,6 +162,37 @@ def format_reply(data: dict, transcript: str) -> str:
     return "\n".join(lines)
 
 
+START_TEXT = (
+    "Ciao, io sono Brevi Saggi Audio. Riassumo testi e trascrivo vocali. "
+    "Nel gruppo rispondo solo se mi interpelli con un comando. "
+    "Per i vocali, scrivimi in privato. "
+    "Sono nato per un Tipicissimo bisogno umano"
+)
+
+HELP_TEXT = (
+    "Comandi disponibili:\n"
+    "/info\n"
+    "/help\n"
+    "/start\n\n"
+    "Nel gruppo:\n"
+    "/riassumi@SaggiAudioBot testo da riassumere\n\n"
+    "In privato:\n"
+    "mandami un vocale o un file audio."
+)
+
+INFO_TEXT = (
+    "Brevi Saggi Audio serve per trasformare contenuti lunghi in qualcosa di veloce da leggere.\n\n"
+    "Cosa fa:\n"
+    "- riassume testi\n"
+    "- trascrive vocali\n"
+    "- evidenzia le cose importanti\n\n"
+    "Come si usa:\n"
+    "Nel gruppo: /riassumi@SaggiAudioBot testo da riassumere\n"
+    "In privato: inviami un vocale o un file audio.\n\n"
+    "Nota: nel gruppo i vocali non si riassumono tramite risposta al messaggio; per quelli usa la chat privata con il bot."
+)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -196,19 +227,15 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
 
     if is_group_chat(message):
         if command == "/start":
-            await send_message(
-                chat_id,
-                "Nel gruppo il bot funziona solo quando lo interpelli.\n\nUsa:\n/riassumi@SaggiAudioBot testo da riassumere\n/help@SaggiAudioBot",
-                message_id,
-            )
+            await send_message(chat_id, START_TEXT, message_id)
             return JSONResponse({"ok": True})
 
         if command == "/help":
-            await send_message(
-                chat_id,
-                "Uso nel gruppo:\n/riassumi@SaggiAudioBot testo da riassumere\n\nIl bot ignora tutti gli altri messaggi.",
-                message_id,
-            )
+            await send_message(chat_id, HELP_TEXT, message_id)
+            return JSONResponse({"ok": True})
+
+        if command == "/info":
+            await send_message(chat_id, INFO_TEXT, message_id)
             return JSONResponse({"ok": True})
 
         if command != "/riassumi":
@@ -235,19 +262,15 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
 
     if text:
         if command == "/start":
-            await send_message(
-                chat_id,
-                "Mandami un messaggio vocale o inoltrami un audio da Telegram e ti restituisco trascrizione e cose importanti. Nei gruppi usa /riassumi@SaggiAudioBot seguito dal testo.",
-                message_id,
-            )
+            await send_message(chat_id, START_TEXT, message_id)
             return JSONResponse({"ok": True})
 
         if command == "/help":
-            await send_message(
-                chat_id,
-                "Comandi disponibili:\n/start\n/help\n\nIn chat privata: inviami un vocale o un file audio.\nNel gruppo: usa /riassumi@SaggiAudioBot testo.",
-                message_id,
-            )
+            await send_message(chat_id, HELP_TEXT, message_id)
+            return JSONResponse({"ok": True})
+
+        if command == "/info":
+            await send_message(chat_id, INFO_TEXT, message_id)
             return JSONResponse({"ok": True})
 
     voice = message.get("voice")
@@ -256,7 +279,11 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
     media = voice or audio or document
 
     if not media:
-        await send_message(chat_id, "Mandami un vocale Telegram o un file audio supportato.", message_id)
+        await send_message(
+            chat_id,
+            "Mandami un vocale Telegram o un file audio supportato.\nPer vedere tutte le funzioni usa /info.",
+            message_id,
+        )
         return JSONResponse({"ok": True})
 
     file_size = media.get("file_size", 0)
