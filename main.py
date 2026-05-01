@@ -139,7 +139,7 @@ def format_reply(data: dict, transcript: str) -> str:
     lines = ["Trascrizione", transcript.strip() or "Trascrizione non disponibile."]
 
     if key_points:
-        lines.extend(["", "Cose importanti"])
+        lines.extend(["", "Cose importantissime"])
         lines.extend([f"- {point}" for point in key_points])
 
     return "\n".join(lines)
