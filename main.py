@@ -134,27 +134,13 @@ Trascrizione:
 
 
 def format_reply(data: dict, transcript: str) -> str:
-    summary = data.get("summary", "Nessun riassunto disponibile.")
     key_points = data.get("key_points", [])
-    actions = data.get("actions", [])
-    entities = data.get("entities", [])
 
-    lines = ["Riassunto audio", "", "Sintesi", summary]
+    lines = ["Trascrizione", transcript.strip() or "Trascrizione non disponibile."]
 
     if key_points:
         lines.extend(["", "Cose importanti"])
         lines.extend([f"- {point}" for point in key_points])
-
-    if actions:
-        lines.extend(["", "Azioni"])
-        lines.extend([f"- {action}" for action in actions])
-
-    if entities:
-        lines.extend(["", "Entità"])
-        lines.extend([f"- {entity}" for entity in entities])
-
-    if transcript:
-        lines.extend(["", "Trascrizione", transcript])
 
     return "\n".join(lines)
 
