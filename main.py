@@ -53,6 +53,11 @@ def openai_summary_model() -> str:
     return get_env("OPENAI_SUMMARY_MODEL", "gpt-4o-mini")
 
 
+def is_group_chat(message: dict) -> bool:
+    chat_type = message.get("chat", {}).get("type")
+    return chat_type in {"group", "supergroup"}
+
+
 async def tg_api(method: str, payload: Optional[dict] = None) -> dict:
     async with httpx.AsyncClient(timeout=60) as http:
         r = await http.post(f"{telegram_api_base()}/{method}", json=payload or {})
@@ -139,7 +144,7 @@ def format_reply(data: dict, transcript: str) -> str:
     lines = ["Trascrizione", transcript.strip() or "Trascrizione non disponibile."]
 
     if key_points:
-        lines.extend(["", "Cose importantissime"])
+        lines.extend(["", "Cose importanti"])
         lines.extend([f"- {point}" for point in key_points])
 
     return "\n".join(lines)
@@ -172,43 +177,78 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
     if not message:
         return JSONResponse({"ok": True})
 
+    original_message_id = message.get("message_id")
     chat_id = message["chat"]["id"]
+
+    if is_group_chat(message):
+        command_text = (message.get("text") or "").strip().split("@")[0].lower()
+
+        if command_text != "/riassumi":
+            return JSONResponse({"ok": True})
+
+        replied = message.get("reply_to_message")
+        if not replied:
+            await send_message(
+                chat_id,
+                "Rispondi con /riassumi a un messaggio o a un vocale del gruppo.",
+                original_message_id,
+            )
+            return JSONResponse({"ok": True})
+
+        message = replied
+        chat_id = message["chat"]["id"]
+
+    else:
+        if message.get("text"):
+            text = message["text"].strip().lower()
+            if text == "/start":
+                await send_message(
+                    chat_id,
+                    "Mandami un messaggio vocale o inoltrami un audio da Telegram e ti restituisco trascrizione e cose importanti. Nei gruppi, usa /riassumi in risposta a un messaggio o a un vocale.",
+                    original_message_id,
+                )
+                return JSONResponse({"ok": True})
+            if text == "/help":
+                await send_message(
+                    chat_id,
+                    "Comandi disponibili:\n/start\n/help\n\nIn chat privata: inviami un vocale o un file audio.\nNel gruppo: rispondi con /riassumi a un messaggio o a un vocale.",
+                    original_message_id,
+                )
+                return JSONResponse({"ok": True})
+
     message_id = message.get("message_id")
-
-    if message.get("text"):
-        text = message["text"].strip().lower()
-        if text == "/start":
-            await send_message(
-                chat_id,
-                "Mandami un messaggio vocale o inoltrami un audio da Telegram e ti restituisco trascrizione, riassunto, punti chiave e azioni.",
-                message_id,
-            )
-            return JSONResponse({"ok": True})
-        if text == "/help":
-            await send_message(
-                chat_id,
-                "Comandi disponibili:\n/start\n/help\n\nPoi inviami un vocale o un file audio.",
-                message_id,
-            )
-            return JSONResponse({"ok": True})
-
     voice = message.get("voice")
     audio = message.get("audio")
     document = message.get("document")
     media = voice or audio or document
 
-    
-
     if not media:
-        await send_message(chat_id, "Mandami un vocale Telegram o un file audio supportato.", message_id)
+        if message.get("text"):
+            transcript = message["text"].strip()
+            if not transcript:
+                await send_message(chat_id, "Il messaggio è vuoto.", original_message_id)
+                return JSONResponse({"ok": True})
+
+            await send_message(chat_id, "Sto leggendo il messaggio e preparo il riassunto...", original_message_id)
+
+            try:
+                structured = summarize_transcript(transcript)
+                reply = format_reply(structured, transcript)
+                await send_message(chat_id, reply, original_message_id)
+            except Exception as exc:
+                await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", original_message_id)
+
+            return JSONResponse({"ok": True})
+
+        await send_message(chat_id, "Mandami un vocale Telegram, un file audio, oppure usa /riassumi in risposta a un messaggio.", original_message_id)
         return JSONResponse({"ok": True})
 
     file_size = media.get("file_size", 0)
     if file_size > max_file_mb() * 1024 * 1024:
-        await send_message(chat_id, f"File troppo grande. Limite attuale: {max_file_mb()} MB.", message_id)
+        await send_message(chat_id, f"File troppo grande. Limite attuale: {max_file_mb()} MB.", original_message_id)
         return JSONResponse({"ok": True})
 
-    await send_message(chat_id, "Sto ascoltando il messaggio e preparo il riassunto...", message_id)
+    await send_message(chat_id, "Sto ascoltando il messaggio e preparo il riassunto...", original_message_id)
 
     temp_file: Optional[Path] = None
     try:
@@ -218,9 +258,9 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
         transcript = transcribe_audio(temp_file)
         structured = summarize_transcript(transcript)
         reply = format_reply(structured, transcript)
-        await send_message(chat_id, reply, message_id)
+        await send_message(chat_id, reply, original_message_id)
     except Exception as exc:
-        await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", message_id)
+        await send_message(chat_id, f"Errore durante l'elaborazione: {str(exc)[:300]}", original_message_id)
     finally:
         if temp_file and temp_file.exists():
             temp_file.unlink(missing_ok=True)
