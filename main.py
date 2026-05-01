@@ -67,7 +67,6 @@ async def send_message(chat_id: int, text: str, reply_to_message_id: Optional[in
     payload = {
         "chat_id": chat_id,
         "text": text,
-        "parse_mode": "Markdown",
         "disable_web_page_preview": True,
     }
     if reply_to_message_id:
