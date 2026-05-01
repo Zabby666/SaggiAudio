@@ -197,6 +197,25 @@ async def webhook(request: Request, x_telegram_bot_api_secret_token: Optional[st
     document = message.get("document")
     media = voice or audio or document
 
+    def is_group_chat(message: dict) -> bool:
+    chat_type = message.get("chat", {}).get("type")
+    return chat_type in {"group", "supergroup"}
+
+
+message = update.get("message", {})
+text = (message.get("text") or "").strip()
+
+if is_group_chat(message):
+    if not text.startswith("/riassumi"):
+        return {"ok": True}
+
+    replied = message.get("reply_to_message")
+    if not replied:
+        send_message(message["chat"]["id"], "Rispondi con /riassumi a un messaggio o a un vocale.")
+        return {"ok": True}
+
+    message = replied
+
     if not media:
         await send_message(chat_id, "Mandami un vocale Telegram o un file audio supportato.", message_id)
         return JSONResponse({"ok": True})
